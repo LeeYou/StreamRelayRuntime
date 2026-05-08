@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Configure
+        run: cmake -S . -B build -DSTREAMRELAY_BUILD_TESTS=ON
+      - name: Build Debug
+        run: cmake --build build --config Debug
+      - name: Test Debug
+        run: ctest --test-dir build -C Debug --output-on-failure
+      - name: Build Release
+        run: cmake --build build --config Release
+      - name: Test Release
+        run: ctest --test-dir build -C Release --output-on-failure

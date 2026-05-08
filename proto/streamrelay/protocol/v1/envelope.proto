@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package streamrelay.protocol.v1;
+
+message Envelope {
+  uint32 version = 1;
+  uint64 request_id = 2;
+  uint64 trace_id = 3;
+  string source = 4;
+  string target = 5;
+  string service = 6;
+  string method = 7;
+  string session_id = 8;
+  string principal_id = 9;
+  int64 deadline_unix_ms = 10;
+  map<string, string> labels = 11;
+  string payload_type = 12;
+  bytes payload = 13;
+}
+
+message Error {
+  uint32 code = 1;
+  string name = 2;
+  string message = 3;
+  bool retryable = 4;
+}
