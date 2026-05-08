@@ -32,11 +32,21 @@ struct GatewaySocketEventLoopStatus {
     std::size_t active_connections{0};
     std::size_t frames_processed{0};
     std::size_t failed_frames{0};
+    std::size_t frames_sent{0};
+    std::size_t failed_writes{0};
+    std::size_t closed_connections{0};
+    std::size_t failed_closes{0};
 };
 
 struct GatewaySocketEventLoopStepResult {
     WebSocketGatewayAcceptResult gateway;
     std::size_t active_connections{0};
+};
+
+struct GatewaySocketEventLoopBatchResult {
+    std::size_t attempted{0};
+    std::size_t succeeded{0};
+    std::size_t failed{0};
 };
 
 class GatewaySocketEventLoop {
@@ -46,6 +56,11 @@ public:
     core::Result<void> start(const GatewaySocketEventLoopOptions& options);
     core::Result<GatewaySocketEventLoopStepResult> run_once(std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now);
     core::Result<void> pump_frame_once(transport::TransportConnectionId transport_id, std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now);
+    core::Result<GatewaySocketEventLoopBatchResult> pump_active_frames_once(std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now);
+    core::Result<GatewaySocketEventLoopBatchResult> pump_ready_frames_once(std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now);
+    core::Result<void> send_websocket_binary_once(transport::TransportConnectionId transport_id, core::ByteBuffer payload);
+    core::Result<GatewaySocketEventLoopBatchResult> send_websocket_binary_to_all_once(const core::ByteBuffer& payload);
+    core::Result<void> close_connection_once(transport::TransportConnectionId transport_id);
     core::Result<void> stop();
     GatewaySocketEventLoopStatus status() const noexcept;
 
@@ -58,6 +73,7 @@ private:
     core::Result<core::ByteBuffer> read_websocket_frame(transport::TcpConnection& connection) const;
     core::Result<core::ByteBuffer> read_exact(transport::TcpConnection& connection, std::size_t bytes) const;
     ActiveConnection* find_connection(transport::TransportConnectionId transport_id) noexcept;
+    std::vector<transport::TransportConnectionId> active_transport_ids() const;
 
     WebSocketGatewayAdapter& adapter_;
     transport::TcpListener listener_;

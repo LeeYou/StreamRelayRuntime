@@ -39,6 +39,7 @@ public:
 
     core::Result<core::ByteBuffer> read_some(std::size_t max_bytes);
     core::Result<void> write_all(const core::ByteBuffer& bytes);
+    core::Result<bool> readable_now() const;
     core::Result<void> close();
     bool open() const noexcept;
     const TcpAcceptedConnection& info() const noexcept;

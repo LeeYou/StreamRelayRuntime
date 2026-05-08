@@ -3,6 +3,8 @@
 #include <limits>
 #include <utility>
 
+#include "protocol/websocket_frame.h"
+
 namespace streamrelay::gateway {
 namespace {
 
@@ -48,6 +50,10 @@ core::Result<void> GatewaySocketEventLoop::start(const GatewaySocketEventLoopOpt
     status_.active_connections = 0;
     status_.frames_processed = 0;
     status_.failed_frames = 0;
+    status_.frames_sent = 0;
+    status_.failed_writes = 0;
+    status_.closed_connections = 0;
+    status_.failed_closes = 0;
     connections_.clear();
     return core::success();
 }
@@ -102,6 +108,131 @@ core::Result<void> GatewaySocketEventLoop::pump_frame_once(transport::TransportC
 
     ++status_.frames_processed;
     return core::success();
+}
+
+core::Result<GatewaySocketEventLoopBatchResult> GatewaySocketEventLoop::pump_active_frames_once(std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now) {
+    if (!status_.running) {
+        return core::make_error(core::ErrorCode::InvalidState, "gateway socket event loop is not running");
+    }
+
+    GatewaySocketEventLoopBatchResult result;
+    const auto ids = active_transport_ids();
+    for (auto id : ids) {
+        ++result.attempted;
+        auto pumped = pump_frame_once(id, system_now, steady_now);
+        if (pumped.ok()) {
+            ++result.succeeded;
+        } else {
+            ++result.failed;
+        }
+    }
+    return result;
+}
+
+core::Result<GatewaySocketEventLoopBatchResult> GatewaySocketEventLoop::pump_ready_frames_once(std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now) {
+    if (!status_.running) {
+        return core::make_error(core::ErrorCode::InvalidState, "gateway socket event loop is not running");
+    }
+
+    GatewaySocketEventLoopBatchResult result;
+    const auto ids = active_transport_ids();
+    for (auto id : ids) {
+        auto* active = find_connection(id);
+        if (active == nullptr) {
+            continue;
+        }
+
+        auto readable = active->connection.readable_now();
+        if (!readable.ok()) {
+            ++result.attempted;
+            ++result.failed;
+            ++status_.failed_frames;
+            continue;
+        }
+        if (!readable.value()) {
+            continue;
+        }
+
+        ++result.attempted;
+        auto pumped = pump_frame_once(id, system_now, steady_now);
+        if (pumped.ok()) {
+            ++result.succeeded;
+        } else {
+            ++result.failed;
+        }
+    }
+    return result;
+}
+
+core::Result<void> GatewaySocketEventLoop::send_websocket_binary_once(transport::TransportConnectionId transport_id, core::ByteBuffer payload) {
+    if (!status_.running) {
+        return core::make_error(core::ErrorCode::InvalidState, "gateway socket event loop is not running");
+    }
+
+    auto* active = find_connection(transport_id);
+    if (active == nullptr) {
+        ++status_.failed_writes;
+        return core::make_error(core::ErrorCode::NotFound, "gateway socket connection not found");
+    }
+
+    protocol::WebSocketFrame frame;
+    frame.masked = false;
+    frame.payload = std::move(payload);
+    auto encoded = protocol::encode_websocket_frame(frame);
+    if (!encoded.ok()) {
+        ++status_.failed_writes;
+        return encoded.error();
+    }
+
+    auto written = active->connection.write_all(encoded.value());
+    if (!written.ok()) {
+        ++status_.failed_writes;
+        return written;
+    }
+
+    ++status_.frames_sent;
+    return core::success();
+}
+
+core::Result<GatewaySocketEventLoopBatchResult> GatewaySocketEventLoop::send_websocket_binary_to_all_once(const core::ByteBuffer& payload) {
+    if (!status_.running) {
+        return core::make_error(core::ErrorCode::InvalidState, "gateway socket event loop is not running");
+    }
+
+    GatewaySocketEventLoopBatchResult result;
+    const auto ids = active_transport_ids();
+    for (auto id : ids) {
+        ++result.attempted;
+        auto written = send_websocket_binary_once(id, payload);
+        if (written.ok()) {
+            ++result.succeeded;
+        } else {
+            ++result.failed;
+        }
+    }
+    return result;
+}
+
+core::Result<void> GatewaySocketEventLoop::close_connection_once(transport::TransportConnectionId transport_id) {
+    for (auto it = connections_.begin(); it != connections_.end(); ++it) {
+        if (it->transport_id != transport_id) {
+            continue;
+        }
+
+        auto closed = it->connection.close();
+        if (!closed.ok()) {
+            ++status_.failed_closes;
+            return closed;
+        }
+
+        connections_.erase(it);
+        status_.active_connections = connections_.size();
+        ++status_.closed_connections;
+        return core::success();
+    }
+
+    ++status_.failed_closes;
+    return core::make_error(core::ErrorCode::NotFound, "gateway socket connection not found");
 }
 
 core::Result<void> GatewaySocketEventLoop::stop() {
@@ -191,6 +322,15 @@ GatewaySocketEventLoop::ActiveConnection* GatewaySocketEventLoop::find_connectio
         }
     }
     return nullptr;
+}
+
+std::vector<transport::TransportConnectionId> GatewaySocketEventLoop::active_transport_ids() const {
+    std::vector<transport::TransportConnectionId> ids;
+    ids.reserve(connections_.size());
+    for (const auto& connection : connections_) {
+        ids.push_back(connection.transport_id);
+    }
+    return ids;
 }
 
 } 

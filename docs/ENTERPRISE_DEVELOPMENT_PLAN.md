@@ -28,8 +28,8 @@
 | Phase 5：Remote Command MVP | 已完成 | Command 状态机、Command/Audit port、内存 store/audit、策略、审批、dispatch、ack、result、timeout、cancel | CTest 通过 |
 | Phase 6：Distributed Core MVP | 已完成 | InMemoryServiceRegistry、Router、GatewayTunnelManager、跨 Gateway frame 内存转发 | CTest 通过 |
 | Phase 7：Production Hardening Core MVP | MVP 已完成 | InMemoryTransportServer、Session/Device Registry store port、Command/Audit port、MetricsRegistry、InMemoryLogSink、模块化 CTest target、Debug/Release 验证 | CTest 通过 |
-| Phase 8：Gateway Access Core MVP | MVP 已完成 | GatewayEdge 接入编排、TcpListener Windows MVP、同步 accept/read/write MVP、WebSocket handshake codec、WebSocketGatewayAdapter、WebSocketGatewayListener、GatewaySocketEventLoop 单步握手和 frame pump MVP、token 认证、admin/device accept、session/device register、WebSocket frame 解包后交给 GatewayRuntime | CTest 通过 |
-| Phase 9：Cross-Gateway Relay Core MVP | MVP 已完成 | GatewayTunnelBridge 将 GatewayTunnelManager outbound frame 泵送到远端 inbound queue，并支持向 LocalRelayDataPlane 交付 | CTest 通过 |
+| Phase 8：Gateway Access Core MVP | MVP 已完成 | GatewayEdge 接入编排、TcpListener Windows MVP、同步 accept/read/write MVP、WebSocket handshake codec、WebSocketGatewayAdapter、WebSocketGatewayListener、GatewaySocketEventLoop admin/device 单步握手、frame pump、ready/batch pump/write、WebSocket binary 写回、连接关闭、负向 frame 拒绝和多连接隔离 MVP、token 认证、session/device register、stale generation 防护 | CTest 通过 |
+| Phase 9：Cross-Gateway Relay Core MVP | MVP 已完成 | GatewayTunnelBridge 将 GatewayTunnelManager outbound frame 泵送到远端 inbound queue，InMemoryGatewayTunnelTransport 字节传输边界 MVP，并支持向 LocalRelayDataPlane 交付 | CTest 通过 |
 | Phase 10：Security/Auth Core MVP | MVP 已完成 | StaticTokenAuthenticator、AuthorizationPolicy、SecureControlService，将 token/RBAC 与 ControlService submit_command 串联 | CTest 通过 |
 | Phase 11：Observability/SLO Core MVP | MVP 已完成 | PrometheusExporter、HealthRegistry、InMemoryTracer、SloRegistry，支持 metrics 文本导出、health/readiness、trace span、SLO 判定 | CTest 通过 |
 | Phase 12：Ops/Release Core MVP | MVP 已完成 | RuntimeConfigValidator、ReleaseManifestRenderer、GitHub Actions CI workflow，支持配置校验、发布清单渲染、Windows Debug/Release CI 基线 | CTest 通过 |
@@ -45,7 +45,7 @@ ctest --test-dir build -C Debug --output-on-failure
 当前验证结果：
 
 ```text
-100% tests passed, 0 tests failed out of 14
+100% tests passed, 0 tests failed out of 16
 ```
 
 ### 2.3 当前重要边界
@@ -73,12 +73,12 @@ Sprint 1 和 Phase 7 到 Phase 12 MVP 已落地以下文件：
 
 | 范围 | 交付物 |
 |---|---|
-| 测试结构 | `tests/unit/runtime_core_tests.cpp`、`protocol_gateway_tests.cpp`、`gateway_socket_event_loop_tests.cpp`、`session_device_tests.cpp`、`store_port_tests.cpp`、`command_store_port_tests.cpp`、`relay_router_tests.cpp`、`control_tests.cpp`、`enterprise_mvp_tests.cpp` |
+| 测试结构 | `tests/unit/runtime_core_tests.cpp`、`protocol_gateway_tests.cpp`、`gateway_socket_event_loop_tests.cpp`、`gateway_socket_multi_connection_tests.cpp`、`session_device_tests.cpp`、`store_port_tests.cpp`、`command_store_port_tests.cpp`、`relay_router_tests.cpp`、`control_tests.cpp`、`enterprise_mvp_tests.cpp` |
 | P7 Transport/Observability | `src/transport/in_memory_transport.*`、`src/observability/metrics.*` |
 | P7 Store Ports | `src/session/session_store.*`、`src/device_registry/device_registry_store.*` |
 | P7 Command/Audit Ports | `src/control/command_store.*` |
 | P8 Gateway 接入编排 | `src/gateway/gateway_edge.*`、`src/gateway/websocket_gateway_adapter.*`、`src/gateway/websocket_gateway_listener.*`、`src/gateway/gateway_socket_event_loop.*`、`src/transport/websocket_handshake.*`、`src/transport/tcp_listener.*` |
-| P9 Relay Tunnel Bridge | `src/relay/gateway_tunnel_bridge.*` |
+| P9 Relay Tunnel Bridge | `src/relay/gateway_tunnel_bridge.*`、`src/relay/gateway_tunnel_transport.*`、`tests/unit/gateway_tunnel_transport_tests.cpp` |
 | P10 Security/Auth | `src/security/auth.*`、`src/control/secure_control_service.*` |
 | P11 Observability/SLO | `src/observability/prometheus_exporter.*`、`health.*`、`trace.*`、`slo.*` |
 | P12 Ops/Release | `src/ops/runtime_config.*`、`release_manifest.*`、`.github/workflows/ci.yml` |
@@ -161,7 +161,7 @@ ConnectionRef(gateway_id, connection_id, generation)
 
 ## 4.2 Phase 8：真实 Gateway 与设备接入
 
-当前状态：内核 MVP 已完成。已实现 `GatewayEdge`，支持 token 认证、admin/device accept、session 创建、device register/heartbeat、WebSocket binary frame 解包并转交 `GatewayRuntime`。已实现 `WebSocketHandshakeCodec` 和 `WebSocketGatewayAdapter`，支持 HTTP Upgrade 握手解析、`Sec-WebSocket-Accept` 生成、admin/device 握手接入，并支持将真实 socket 读取到的 WebSocket frame 转交给 GatewayEdge。已实现 Windows `TcpListener` MVP，支持 bind/listen、端口 0 自动分配、状态查询、同步 `accept_once`、`read_some`、`write_all` 和停止释放资源。已实现 `WebSocketGatewayListener` 同步 MVP，可从真实 TCP 连接读取握手请求、调用 Gateway adapter，并写回 101 响应。已实现 `GatewaySocketEventLoop` 单步 MVP，支持启动监听、接受一次 admin/device 握手、维护 active connection 与 accept 统计，并可从真实 TCP 连接读取一帧 WebSocket binary frame 后泵入 GatewayRuntime。Debug/Release 全量 CTest 已通过。
+当前状态：内核 MVP 已完成。已实现 `GatewayEdge`，支持 token 认证、admin/device accept、session 创建、device register/heartbeat、WebSocket binary frame 解包并转交 `GatewayRuntime`。已实现 `WebSocketHandshakeCodec` 和 `WebSocketGatewayAdapter`，支持 HTTP Upgrade 握手解析、`Sec-WebSocket-Accept` 生成、admin/device 握手接入，并支持将真实 socket 读取到的 WebSocket frame 转交给 GatewayEdge。已实现 Windows `TcpListener` MVP，支持 bind/listen、端口 0 自动分配、状态查询、同步 `accept_once`、`read_some`、`write_all`、零超时 `readable_now` 和停止释放资源。已实现 `WebSocketGatewayListener` 同步 MVP，可从真实 TCP 连接读取握手请求、调用 Gateway adapter，并写回 101 响应。已实现 `GatewaySocketEventLoop` 单步 MVP，支持启动监听、接受一次 admin/device 握手、维护 active connection 与 accept/frame/write/close 统计，可从真实 TCP 连接读取一帧 WebSocket binary frame 后泵入 GatewayRuntime，也可向真实 TCP 连接写回 server-side unmasked WebSocket binary frame，并支持按 transport_id 关闭真实 TCP 连接；同时提供 `pump_ready_frames_once`、`pump_active_frames_once` 和 `send_websocket_binary_to_all_once` 作为连续读写 frame pump 与非阻塞扫描前置 API。当前 loopback 测试已覆盖 admin 真实握手与 `control.submit_command` frame pump、server binary 写回，也覆盖 device 真实握手、DeviceRegistry presence/heartbeat、`device.telemetry` frame pump、同设备重连后旧 connection 的迟到 offline/session close 不会清理新 presence、旧 transport_id 连接关闭、真实 socket 上未 masked client frame、过期 envelope、超限 WebSocket frame 的拒绝路径，以及两个真实 admin socket 连接的顺序 accept、无数据 ready pump 不阻塞、单连接 ready pump、batch frame pump、broadcast binary write、定向 binary write 和关闭隔离。Debug/Release 全量 CTest 已通过。
 
 ### 目标
 
@@ -176,20 +176,22 @@ ConnectionRef(gateway_id, connection_id, generation)
 | P8-3 | 设备注册流程 | P0 | register_device handler | DeviceRegistry 返回正确 gateway/connection/generation |
 | P8-4 | 心跳流程 | P0 | heartbeat handler | TTL 自动续期，过期后 offline |
 | P8-5 | 命令端到端链路 | P0 | submit_command -> device.execute -> result | 管理端可收到命令结果 |
-| P8-6 | Gateway 写回响应 | P1 | response writer | command ack/result 可回到正确连接 |
-| P8-7 | 连接异常清理 | P1 | disconnect handlers | stale generation 不影响新连接 |
+| P8-6 | Gateway 写回响应 | P1 | response writer | command ack/result 可回到正确连接，真实 socket binary 写回 MVP 已覆盖 |
+| P8-7 | 连接异常清理 | P1 | disconnect handlers | stale generation 不影响新连接，event loop close_connection_once MVP 已覆盖 |
 
 ### 验收门禁
 
-- 两个模拟客户端可以真实接入。
-- 在线设备 lookup 返回正确 Gateway 位置。
+- 两个模拟客户端可以真实接入。admin/device loopback MVP 已覆盖。
+- 在线设备 lookup 返回正确 Gateway 位置。device loopback MVP 已覆盖 presence connection 与 session_id。
+- Gateway 可向正确连接写回响应。admin loopback binary write MVP 已覆盖。
+- 多连接隔离可验证。两个 admin loopback 连接的 ready pump/batch pump/broadcast write/定向 write/close MVP 已覆盖。
 - 管理端提交命令，设备模拟器收到并返回结果。
-- 断开重连后旧断线事件不会移除新 presence。
-- 非法 frame、过期 envelope、超限 payload 被安全拒绝。
+- 断开重连后旧断线事件不会移除新 presence。device reconnect stale generation MVP 已覆盖。
+- 非法 frame、过期 envelope、超限 payload 被安全拒绝。真实 socket negative frame MVP 已覆盖。
 
 ## 4.3 Phase 9：Relay 跨 Gateway 数据面
 
-当前状态：内核 MVP 已完成。已实现 `GatewayTunnelBridge`，可以把一个 Gateway tunnel 的 outbound frame 泵送到另一个 Gateway tunnel 的 inbound queue，并支持向本地 Relay data plane 交付。真实跨进程 tunnel transport、重连和窗口流控仍待实现。
+当前状态：内核 MVP 已完成。已实现 `GatewayTunnelBridge`，可以把一个 Gateway tunnel 的 outbound frame 泵送到另一个 Gateway tunnel 的 inbound queue，并支持向本地 Relay data plane 交付。已实现 `InMemoryGatewayTunnelTransport` 字节传输边界 MVP，可按 source/destination gateway_id 暂存 encoded relay frame bytes，并通过 `GatewayTunnelBridge::pump_to_transport_once` / `pump_from_transport_once` 完成 GatewayTunnelManager -> transport -> GatewayTunnelManager 的双向传输。真实跨进程 tunnel socket、重连和窗口流控仍待实现。
 
 ### 目标
 
@@ -199,7 +201,7 @@ ConnectionRef(gateway_id, connection_id, generation)
 
 | 编号 | 工作项 | 优先级 | 输出物 | 验收标准 |
 |---|---|---:|---|---|
-| P9-1 | Gateway Tunnel transport | P0 | tunnel adapter | 两个 Gateway 建立内部连接 |
+| P9-1 | Gateway Tunnel transport | P0 | tunnel adapter | 两个 Gateway 建立内部连接；内存字节 transport 边界 MVP 已覆盖 |
 | P9-2 | RelayControl open/close API | P0 | relay control handlers | 通道创建、关闭可审计 |
 | P9-3 | 跨 Gateway RelayFrame 转发 | P0 | tunnel data plane | 管理端与设备跨 Gateway 双向转发 |
 | P9-4 | Window/credit 初版流控 | P1 | flow-control module | 慢接收端触发 backpressure |
@@ -209,6 +211,7 @@ ConnectionRef(gateway_id, connection_id, generation)
 ### 验收门禁
 
 - Gateway A 和 Gateway B 独立进程运行。
+- GatewayTunnelManager 可经 transport 边界双向传输 encoded relay frame。内存 transport MVP 已覆盖。
 - Admin 连接 Gateway A，Device 连接 Gateway B，二进制帧可双向转发。
 - hard limit 关闭通道并写入 close reason。
 - Relay stats 可观测。
@@ -379,10 +382,10 @@ ConnectionRef(gateway_id, connection_id, generation)
 
 | 风险 | 影响 | 当前状态 | 缓解措施 |
 |---|---|---|---|
-| 真实网络接入尚未实现 | MVP 不能真实部署 | TcpListener + WebSocket handshake/adapter/listener + GatewaySocketEventLoop 单步握手和 frame pump MVP 已完成，生产级多连接非阻塞事件循环未完成 | 基于 `GatewaySocketEventLoop` 演进多连接 event loop、连续读写 frame pump 和外部客户端兼容测试 |
+| 真实网络接入尚未实现 | MVP 不能真实部署 | TcpListener + WebSocket handshake/adapter/listener + GatewaySocketEventLoop 单步握手、frame pump、ready/batch pump/write、binary write、connection close、stale generation、negative frame 和多连接隔离 MVP 已完成，生产级多连接非阻塞事件循环未完成 | 基于 `GatewaySocketEventLoop` 演进多连接 event loop、连续读写 frame pump 和外部客户端兼容测试 |
 | Redis/DB adapter 尚未实现 | 重启后状态丢失 | 未完成 | 抽象 store port，先做 adapter 测试 |
 | 安全授权不足 | 远程控制风险高 | 静态 token/RBAC MVP 已完成 | Phase 10 后续实现 TLS、JWT/OIDC、ABAC、防重放、审计持久化 |
-| 跨 Gateway tunnel 仅内存模型 | 无法跨进程转发 | bridge MVP 已完成，真实 transport 未完成 | Phase 9 后续实现真实 tunnel transport |
+| 跨 Gateway tunnel 仅内存模型 | 无法跨进程转发 | bridge MVP 和内存字节 transport 边界 MVP 已完成，真实跨进程 socket transport 未完成 | Phase 9 后续实现真实 tunnel socket transport、重连和窗口流控 |
 | 可观测性不足 | 生产排障困难 | Metrics/log/Prometheus text/health/trace/SLO MVP 已完成 | Phase 11 后续接真实 HTTP endpoint 与 OpenTelemetry exporter |
 | 无 CI | 回归风险高 | GitHub Actions Windows Debug/Release CI 基线已完成 | Phase 12 后续补 artifact、coverage、security scan 和 CD |
 | 单元测试文件过大 | 后续维护困难 | 已缓解 | 继续逐步把 `runtime_tests.cpp` 中全量回归拆成独立模块测试 |
@@ -411,7 +414,7 @@ ConnectionRef(gateway_id, connection_id, generation)
 
 ### Sprint 2：Transport 抽象和真实 Gateway
 
-当前状态：内核 MVP 已完成。已实现 `InMemoryTransportServer`、Windows `TcpListener`、同步 accept/read/write MVP、`GatewayEdge`、`WebSocketHandshakeCodec`、`WebSocketGatewayAdapter`、`WebSocketGatewayListener` 和 `GatewaySocketEventLoop` 单步握手/frame pump MVP，Debug/Release 全量 CTest 已通过。下一步是生产级多连接非阻塞事件循环和外部客户端兼容测试。
+当前状态：内核 MVP 已完成。已实现 `InMemoryTransportServer`、Windows `TcpListener`、同步 accept/read/write/readable_now MVP、`GatewayEdge`、`WebSocketHandshakeCodec`、`WebSocketGatewayAdapter`、`WebSocketGatewayListener` 和 `GatewaySocketEventLoop` admin/device 单步握手/frame pump/ready pump/batch pump-write/binary write/connection close/stale generation/negative frame/multi-connection isolation MVP，Debug/Release 全量 CTest 已通过。下一步是生产级多连接非阻塞事件循环和外部客户端兼容测试。
 
 目标：让系统具备真实连接能力。
 

@@ -19,7 +19,7 @@
 
 namespace {
 
-std::string admin_handshake_request(const std::string& token) {
+std::string handshake_request(const std::string& token, const std::string& device_id = {}) {
     std::string request;
     request += "GET /streamrelay HTTP/1.1\r\n";
     request += "Host: localhost\r\n";
@@ -28,6 +28,9 @@ std::string admin_handshake_request(const std::string& token) {
     request += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
     request += "Sec-WebSocket-Version: 13\r\n";
     request += "X-StreamRelay-Token: " + token + "\r\n";
+    if (!device_id.empty()) {
+        request += "X-StreamRelay-Device-Id: " + device_id + "\r\n";
+    }
     request += "\r\n";
     return request;
 }
@@ -38,6 +41,17 @@ streamrelay::core::ByteBuffer make_masked_websocket_envelope(const streamrelay::
     streamrelay::protocol::WebSocketFrame websocket;
     websocket.masked = true;
     websocket.masking_key = 0x01020304;
+    websocket.payload = encoded_envelope.value();
+    auto encoded_websocket = streamrelay::protocol::encode_websocket_frame(websocket);
+    assert(encoded_websocket.ok());
+    return encoded_websocket.value();
+}
+
+streamrelay::core::ByteBuffer make_unmasked_websocket_envelope(const streamrelay::protocol::Envelope& envelope) {
+    auto encoded_envelope = streamrelay::protocol::encode_envelope_frame(envelope);
+    assert(encoded_envelope.ok());
+    streamrelay::protocol::WebSocketFrame websocket;
+    websocket.masked = false;
     websocket.payload = encoded_envelope.value();
     auto encoded_websocket = streamrelay::protocol::encode_websocket_frame(websocket);
     assert(encoded_websocket.ok());
@@ -69,6 +83,14 @@ int main() {
         return streamrelay::core::success();
     });
     assert(subscribed.ok());
+    int device_delivered = 0;
+    auto device_subscribed = bus.subscribe(streamrelay::messaging::make_route("device", "telemetry"), [&](const streamrelay::messaging::Message& message) {
+        ++device_delivered;
+        assert(message.service == "device");
+        assert(message.method == "telemetry");
+        return streamrelay::core::success();
+    });
+    assert(device_subscribed.ok());
     streamrelay::gateway::GatewayRuntimeOptions runtime_options;
     runtime_options.connection_manager.gateway_id = "gateway-a";
     streamrelay::gateway::GatewayRuntime runtime{runtime_options, bus};
@@ -108,7 +130,7 @@ int main() {
     auto connect_result = connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
     assert(connect_result != SOCKET_ERROR);
 
-    const auto request = admin_handshake_request("admin-token");
+    const auto request = handshake_request("admin-token");
     auto sent_request = send(client, request.data(), static_cast<int>(request.size()), 0);
     assert(sent_request == static_cast<int>(request.size()));
 
@@ -149,12 +171,216 @@ int main() {
     assert(status.frames_processed == 1);
     assert(status.failed_frames == 0);
 
+    auto written = event_loop.send_websocket_binary_once(step.value().gateway.edge.transport_id, streamrelay::core::ByteBuffer{9, 8, 7});
+    assert(written.ok());
+    char server_frame[512]{};
+    auto received_server_frame = recv(client, server_frame, sizeof(server_frame), 0);
+    assert(received_server_frame > 0);
+    streamrelay::core::ByteBuffer encoded_server_frame(server_frame, server_frame + received_server_frame);
+    streamrelay::protocol::WebSocketFrameLimits server_frame_limits;
+    server_frame_limits.require_masked_client_frames = false;
+    auto decoded_server_frame = streamrelay::protocol::decode_websocket_frame(encoded_server_frame, server_frame_limits);
+    assert(decoded_server_frame.ok());
+    assert(decoded_server_frame.value().payload == streamrelay::core::ByteBuffer({9, 8, 7}));
+    status = event_loop.status();
+    assert(status.frames_sent == 1);
+    assert(status.failed_writes == 0);
+
     closesocket(client);
     auto stopped = event_loop.stop();
     assert(stopped.ok());
     status = event_loop.status();
     assert(!status.running);
     assert(status.active_connections == 0);
+
+    options.accept_kind = streamrelay::gateway::GatewaySocketAcceptKind::Device;
+    auto device_started = event_loop.start(options);
+    assert(device_started.ok());
+    status = event_loop.status();
+    assert(status.running);
+    assert(status.port > 0);
+
+    auto device_client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(device_client != INVALID_SOCKET);
+    receive_timeout_result = setsockopt(device_client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    send_timeout_result = setsockopt(device_client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    assert(receive_timeout_result == 0);
+    assert(send_timeout_result == 0);
+
+    address.sin_port = htons(status.port);
+    connect_result = connect(device_client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    assert(connect_result != SOCKET_ERROR);
+
+    const auto device_request = handshake_request("admin-token", "device-1");
+    sent_request = send(device_client, device_request.data(), static_cast<int>(device_request.size()), 0);
+    assert(sent_request == static_cast<int>(device_request.size()));
+
+    auto device_step = event_loop.run_once(system_now, steady_now);
+    assert(device_step.ok());
+    assert(device_step.value().active_connections == 1);
+    assert(device_step.value().gateway.edge.session_id.find("tenant-1:device-1:") == 0);
+    assert(metrics.counter("gateway.device_accepted") == 1);
+
+    received = recv(device_client, response, sizeof(response), 0);
+    assert(received > 0);
+    const std::string raw_device_response{response, static_cast<std::size_t>(received)};
+    assert(raw_device_response.find("101 Switching Protocols") != std::string::npos);
+
+    auto found_device = devices.find_device("tenant-1", "device-1", system_now);
+    assert(found_device.ok());
+    assert(found_device.value().presence.connection.has_value());
+    assert(found_device.value().presence.session_id == device_step.value().gateway.edge.session_id);
+
+    streamrelay::protocol::Envelope device_envelope;
+    device_envelope.request_id = 101;
+    device_envelope.trace_id = 201;
+    device_envelope.service = "device";
+    device_envelope.method = "telemetry";
+    device_envelope.deadline_unix_ms = streamrelay::protocol::to_unix_ms(system_now + std::chrono::seconds{10});
+    device_envelope.payload = streamrelay::core::ByteBuffer{4, 5, 6};
+    websocket_frame = make_masked_websocket_envelope(device_envelope);
+    sent_frame = send(device_client, reinterpret_cast<const char*>(websocket_frame.data()), static_cast<int>(websocket_frame.size()), 0);
+    assert(sent_frame == static_cast<int>(websocket_frame.size()));
+
+    pumped = event_loop.pump_frame_once(device_step.value().gateway.edge.transport_id, system_now, steady_now);
+    assert(pumped.ok());
+    assert(device_delivered == 1);
+    assert(metrics.counter("gateway.frame_processed") == 2);
+    status = event_loop.status();
+    assert(status.frames_processed == 1);
+    assert(status.failed_frames == 0);
+
+    auto device_client_reconnect = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(device_client_reconnect != INVALID_SOCKET);
+    receive_timeout_result = setsockopt(device_client_reconnect, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    send_timeout_result = setsockopt(device_client_reconnect, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    assert(receive_timeout_result == 0);
+    assert(send_timeout_result == 0);
+
+    connect_result = connect(device_client_reconnect, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    assert(connect_result != SOCKET_ERROR);
+    sent_request = send(device_client_reconnect, device_request.data(), static_cast<int>(device_request.size()), 0);
+    assert(sent_request == static_cast<int>(device_request.size()));
+
+    auto reconnected_device_step = event_loop.run_once(system_now, steady_now);
+    assert(reconnected_device_step.ok());
+    assert(reconnected_device_step.value().active_connections == 2);
+    assert(reconnected_device_step.value().gateway.edge.session_id.find("tenant-1:device-1:") == 0);
+    assert(metrics.counter("gateway.device_accepted") == 2);
+
+    received = recv(device_client_reconnect, response, sizeof(response), 0);
+    assert(received > 0);
+    const std::string raw_reconnected_device_response{response, static_cast<std::size_t>(received)};
+    assert(raw_reconnected_device_response.find("101 Switching Protocols") != std::string::npos);
+
+    found_device = devices.find_device("tenant-1", "device-1", system_now);
+    assert(found_device.ok());
+    assert(found_device.value().presence.connection.has_value());
+    assert(found_device.value().presence.connection.value() == reconnected_device_step.value().gateway.edge.connection);
+    assert(found_device.value().presence.session_id == reconnected_device_step.value().gateway.edge.session_id);
+
+    auto stale_offline = devices.mark_offline("tenant-1", "device-1", device_step.value().gateway.edge.connection);
+    assert(!stale_offline.ok());
+    assert(stale_offline.error().code == streamrelay::core::ErrorCode::InvalidState);
+    found_device = devices.find_device("tenant-1", "device-1", system_now);
+    assert(found_device.ok());
+    assert(found_device.value().presence.connection.has_value());
+    assert(found_device.value().presence.connection.value() == reconnected_device_step.value().gateway.edge.connection);
+
+    auto stale_session_close = sessions.close_by_connection(device_step.value().gateway.edge.connection);
+    assert(!stale_session_close.ok());
+    assert(stale_session_close.error().code == streamrelay::core::ErrorCode::NotFound);
+    auto active_session = sessions.find_by_connection(reconnected_device_step.value().gateway.edge.connection, system_now);
+    assert(active_session.ok());
+    assert(active_session.value().session_id == reconnected_device_step.value().gateway.edge.session_id);
+
+    auto closed_old_device = event_loop.close_connection_once(device_step.value().gateway.edge.transport_id);
+    assert(closed_old_device.ok());
+    status = event_loop.status();
+    assert(status.active_connections == 1);
+    assert(status.closed_connections == 1);
+    assert(status.failed_closes == 0);
+
+    auto unmasked_frame = make_unmasked_websocket_envelope(device_envelope);
+    sent_frame = send(device_client_reconnect, reinterpret_cast<const char*>(unmasked_frame.data()), static_cast<int>(unmasked_frame.size()), 0);
+    assert(sent_frame == static_cast<int>(unmasked_frame.size()));
+    auto rejected_unmasked = event_loop.pump_frame_once(reconnected_device_step.value().gateway.edge.transport_id, system_now, steady_now);
+    assert(!rejected_unmasked.ok());
+    assert(rejected_unmasked.error().code == streamrelay::core::ErrorCode::ProtocolError);
+    assert(metrics.counter("gateway.frame_rejected") == 1);
+    status = event_loop.status();
+    assert(status.failed_frames == 1);
+
+    streamrelay::protocol::Envelope expired_envelope;
+    expired_envelope.request_id = 102;
+    expired_envelope.trace_id = 202;
+    expired_envelope.service = "device";
+    expired_envelope.method = "telemetry";
+    expired_envelope.deadline_unix_ms = streamrelay::protocol::to_unix_ms(system_now - std::chrono::seconds{1});
+    expired_envelope.payload = streamrelay::core::ByteBuffer{7};
+    websocket_frame = make_masked_websocket_envelope(expired_envelope);
+    sent_frame = send(device_client_reconnect, reinterpret_cast<const char*>(websocket_frame.data()), static_cast<int>(websocket_frame.size()), 0);
+    assert(sent_frame == static_cast<int>(websocket_frame.size()));
+    auto rejected_expired = event_loop.pump_frame_once(reconnected_device_step.value().gateway.edge.transport_id, system_now, steady_now);
+    assert(!rejected_expired.ok());
+    assert(rejected_expired.error().code == streamrelay::core::ErrorCode::DeadlineExceeded);
+    assert(metrics.counter("gateway.frame_rejected") == 2);
+    status = event_loop.status();
+    assert(status.failed_frames == 2);
+
+    closesocket(device_client);
+    closesocket(device_client_reconnect);
+    stopped = event_loop.stop();
+    assert(stopped.ok());
+    status = event_loop.status();
+    assert(!status.running);
+    assert(status.active_connections == 0);
+
+    options.accept_kind = streamrelay::gateway::GatewaySocketAcceptKind::Admin;
+    options.max_frame_bytes = 4;
+    auto limited_started = event_loop.start(options);
+    assert(limited_started.ok());
+    status = event_loop.status();
+    assert(status.running);
+    assert(status.port > 0);
+
+    auto limited_client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(limited_client != INVALID_SOCKET);
+    receive_timeout_result = setsockopt(limited_client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    send_timeout_result = setsockopt(limited_client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    assert(receive_timeout_result == 0);
+    assert(send_timeout_result == 0);
+
+    address.sin_port = htons(status.port);
+    connect_result = connect(limited_client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    assert(connect_result != SOCKET_ERROR);
+    sent_request = send(limited_client, request.data(), static_cast<int>(request.size()), 0);
+    assert(sent_request == static_cast<int>(request.size()));
+
+    auto limited_step = event_loop.run_once(system_now, steady_now);
+    assert(limited_step.ok());
+    received = recv(limited_client, response, sizeof(response), 0);
+    assert(received > 0);
+
+    streamrelay::protocol::WebSocketFrame oversized_frame;
+    oversized_frame.masked = true;
+    oversized_frame.masking_key = 0x01020304;
+    oversized_frame.payload = streamrelay::core::ByteBuffer{1, 2, 3, 4, 5, 6, 7, 8};
+    auto encoded_oversized = streamrelay::protocol::encode_websocket_frame(oversized_frame);
+    assert(encoded_oversized.ok());
+    sent_frame = send(limited_client, reinterpret_cast<const char*>(encoded_oversized.value().data()), static_cast<int>(encoded_oversized.value().size()), 0);
+    assert(sent_frame == static_cast<int>(encoded_oversized.value().size()));
+    auto rejected_oversized = event_loop.pump_frame_once(limited_step.value().gateway.edge.transport_id, system_now, steady_now);
+    assert(!rejected_oversized.ok());
+    assert(rejected_oversized.error().code == streamrelay::core::ErrorCode::ResourceExhausted);
+    status = event_loop.status();
+    assert(status.failed_frames == 1);
+
+    closesocket(limited_client);
+    stopped = event_loop.stop();
+    assert(stopped.ok());
+    status = event_loop.status();
+    assert(!status.running);
 #else
     assert(!started.ok());
 #endif

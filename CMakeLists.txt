@@ -26,6 +26,7 @@ add_library(streamrelay_runtime STATIC
     src/relay/relay_channel.cpp
     src/relay/local_relay_data_plane.cpp
     src/relay/gateway_tunnel.cpp
+    src/relay/gateway_tunnel_transport.cpp
     src/relay/gateway_tunnel_bridge.cpp
     src/control/command_store.cpp
     src/control/control_service.cpp
@@ -82,10 +83,12 @@ if(STREAMRELAY_BUILD_TESTS)
     add_streamrelay_unit_test(streamrelay_websocket_gateway_tests tests/unit/websocket_gateway_tests.cpp)
     add_streamrelay_unit_test(streamrelay_websocket_gateway_listener_tests tests/unit/websocket_gateway_listener_tests.cpp)
     add_streamrelay_unit_test(streamrelay_gateway_socket_event_loop_tests tests/unit/gateway_socket_event_loop_tests.cpp)
+    add_streamrelay_unit_test(streamrelay_gateway_socket_multi_connection_tests tests/unit/gateway_socket_multi_connection_tests.cpp)
     add_streamrelay_unit_test(streamrelay_tcp_listener_tests tests/unit/tcp_listener_tests.cpp)
     add_streamrelay_unit_test(streamrelay_session_device_tests tests/unit/session_device_tests.cpp)
     add_streamrelay_unit_test(streamrelay_store_port_tests tests/unit/store_port_tests.cpp)
     add_streamrelay_unit_test(streamrelay_relay_router_tests tests/unit/relay_router_tests.cpp)
+    add_streamrelay_unit_test(streamrelay_gateway_tunnel_transport_tests tests/unit/gateway_tunnel_transport_tests.cpp)
     add_streamrelay_unit_test(streamrelay_command_store_port_tests tests/unit/command_store_port_tests.cpp)
     add_streamrelay_unit_test(streamrelay_control_tests tests/unit/control_tests.cpp)
     add_streamrelay_unit_test(streamrelay_enterprise_mvp_tests tests/unit/enterprise_mvp_tests.cpp)

@@ -102,6 +102,28 @@ core::Result<void> TcpConnection::write_all(const core::ByteBuffer& bytes) {
 #endif
 }
 
+core::Result<bool> TcpConnection::readable_now() const {
+    if (!open()) {
+        return core::make_error(core::ErrorCode::InvalidState, "tcp connection is closed");
+    }
+
+#ifdef _WIN32
+    fd_set read_set;
+    FD_ZERO(&read_set);
+    FD_SET(static_cast<SOCKET>(accepted_.native_handle), &read_set);
+    timeval timeout{};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+    const auto selected = select(0, &read_set, nullptr, nullptr, &timeout);
+    if (selected == SOCKET_ERROR) {
+        return last_winsock_error("select");
+    }
+    return selected > 0 && FD_ISSET(static_cast<SOCKET>(accepted_.native_handle), &read_set);
+#else
+    return core::make_error(core::ErrorCode::InvalidState, "tcp connection readable probe is only implemented for Windows in this MVP");
+#endif
+}
+
 core::Result<void> TcpConnection::close() {
 #ifdef _WIN32
     if (accepted_.native_handle != 0 && static_cast<SOCKET>(accepted_.native_handle) != INVALID_SOCKET) {
