@@ -32,6 +32,7 @@ public:
 
     core::Result<GatewayEdgeAcceptResult> accept_admin(const std::string& token, std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now);
     core::Result<GatewayEdgeAcceptResult> accept_device(const std::string& token, const std::string& device_id, std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now);
+    core::Result<void> receive_websocket_frame(transport::TransportConnectionId transport_id, core::ByteBuffer encoded_frame, std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now);
     core::Result<void> process_next_frame(transport::TransportConnectionId transport_id, std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now);
     core::Result<void> send_websocket_binary(transport::TransportConnectionId transport_id, core::ByteBuffer payload);
     core::Result<core::ConnectionRef> connection_for(transport::TransportConnectionId transport_id) const;

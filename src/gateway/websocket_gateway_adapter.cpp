@@ -1,5 +1,7 @@
 #include "gateway/websocket_gateway_adapter.h"
 
+#include <utility>
+
 namespace streamrelay::gateway {
 
 WebSocketGatewayAdapter::WebSocketGatewayAdapter(GatewayEdge& edge) : edge_(edge) {}
@@ -46,6 +48,10 @@ core::Result<WebSocketGatewayAcceptResult> WebSocketGatewayAdapter::accept_devic
         return accepted.error();
     }
     return WebSocketGatewayAcceptResult{accepted.value(), handshake.value().raw_response};
+}
+
+core::Result<void> WebSocketGatewayAdapter::receive_websocket_frame(transport::TransportConnectionId transport_id, core::ByteBuffer encoded_frame, std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now) {
+    return edge_.receive_websocket_frame(transport_id, std::move(encoded_frame), system_now, steady_now);
 }
 
 core::Result<std::string> WebSocketGatewayAdapter::required_header(const transport::WebSocketHandshakeRequest& request, const std::string& name) {

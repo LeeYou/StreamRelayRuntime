@@ -17,6 +17,7 @@ add_library(streamrelay_runtime STATIC
     src/gateway/gateway_edge.cpp
     src/gateway/websocket_gateway_adapter.cpp
     src/gateway/websocket_gateway_listener.cpp
+    src/gateway/gateway_socket_event_loop.cpp
     src/session/session_service.cpp
     src/session/session_store.cpp
     src/device_registry/device_registry.cpp
@@ -80,6 +81,7 @@ if(STREAMRELAY_BUILD_TESTS)
     add_streamrelay_unit_test(streamrelay_protocol_gateway_tests tests/unit/protocol_gateway_tests.cpp)
     add_streamrelay_unit_test(streamrelay_websocket_gateway_tests tests/unit/websocket_gateway_tests.cpp)
     add_streamrelay_unit_test(streamrelay_websocket_gateway_listener_tests tests/unit/websocket_gateway_listener_tests.cpp)
+    add_streamrelay_unit_test(streamrelay_gateway_socket_event_loop_tests tests/unit/gateway_socket_event_loop_tests.cpp)
     add_streamrelay_unit_test(streamrelay_tcp_listener_tests tests/unit/tcp_listener_tests.cpp)
     add_streamrelay_unit_test(streamrelay_session_device_tests tests/unit/session_device_tests.cpp)
     add_streamrelay_unit_test(streamrelay_store_port_tests tests/unit/store_port_tests.cpp)

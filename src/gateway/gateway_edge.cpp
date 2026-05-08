@@ -124,6 +124,14 @@ core::Result<void> GatewayEdge::process_next_frame(transport::TransportConnectio
     return core::success();
 }
 
+core::Result<void> GatewayEdge::receive_websocket_frame(transport::TransportConnectionId transport_id, core::ByteBuffer encoded_frame, std::chrono::system_clock::time_point system_now, std::chrono::steady_clock::time_point steady_now) {
+    auto received = transport_.receive_from_client(transport_id, std::move(encoded_frame));
+    if (!received.ok()) {
+        return received;
+    }
+    return process_next_frame(transport_id, system_now, steady_now);
+}
+
 core::Result<void> GatewayEdge::send_websocket_binary(transport::TransportConnectionId transport_id, core::ByteBuffer payload) {
     protocol::WebSocketFrame frame;
     frame.masked = false;
