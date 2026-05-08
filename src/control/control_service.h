@@ -48,7 +48,7 @@ struct CommandResult {
 
 class ControlService {
 public:
-    ControlService(InMemoryCommandStore& store, InMemoryCommandAuditLog& audit, device_registry::InMemoryDeviceRegistry& devices, messaging::InMemoryMessageBus& bus);
+    ControlService(ICommandStore& store, ICommandAuditLog& audit, device_registry::InMemoryDeviceRegistry& devices, messaging::InMemoryMessageBus& bus);
 
     void allow_command_type(std::string command_type);
     void require_approval_for_risk(std::string risk_level);
@@ -71,8 +71,8 @@ private:
     void audit(const CommandRecord& record, const std::string& event_type, const std::string& detail, std::chrono::system_clock::time_point now);
     std::string next_command_id(const std::string& tenant_id);
 
-    InMemoryCommandStore& store_;
-    InMemoryCommandAuditLog& audit_;
+    ICommandStore& store_;
+    ICommandAuditLog& audit_;
     device_registry::InMemoryDeviceRegistry& devices_;
     messaging::InMemoryMessageBus& bus_;
     std::uint64_t next_id_{1};

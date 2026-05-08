@@ -15,8 +15,12 @@ add_library(streamrelay_runtime STATIC
     src/gateway/connection_manager.cpp
     src/gateway/gateway_runtime.cpp
     src/gateway/gateway_edge.cpp
+    src/gateway/websocket_gateway_adapter.cpp
+    src/gateway/websocket_gateway_listener.cpp
     src/session/session_service.cpp
+    src/session/session_store.cpp
     src/device_registry/device_registry.cpp
+    src/device_registry/device_registry_store.cpp
     src/relay/relay_frame.cpp
     src/relay/relay_channel.cpp
     src/relay/local_relay_data_plane.cpp
@@ -28,6 +32,8 @@ add_library(streamrelay_runtime STATIC
     src/router/service_registry.cpp
     src/router/router.cpp
     src/transport/in_memory_transport.cpp
+    src/transport/websocket_handshake.cpp
+    src/transport/tcp_listener.cpp
     src/observability/metrics.cpp
     src/observability/prometheus_exporter.cpp
     src/observability/health.cpp
@@ -51,6 +57,10 @@ else()
     target_compile_options(streamrelay_runtime PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+if(WIN32)
+    target_link_libraries(streamrelay_runtime PUBLIC ws2_32)
+endif()
+
 add_executable(streamrelay_allinone
     apps/allinone/main.cpp
 )
@@ -68,8 +78,13 @@ if(STREAMRELAY_BUILD_TESTS)
 
     add_streamrelay_unit_test(streamrelay_runtime_core_tests tests/unit/runtime_core_tests.cpp)
     add_streamrelay_unit_test(streamrelay_protocol_gateway_tests tests/unit/protocol_gateway_tests.cpp)
+    add_streamrelay_unit_test(streamrelay_websocket_gateway_tests tests/unit/websocket_gateway_tests.cpp)
+    add_streamrelay_unit_test(streamrelay_websocket_gateway_listener_tests tests/unit/websocket_gateway_listener_tests.cpp)
+    add_streamrelay_unit_test(streamrelay_tcp_listener_tests tests/unit/tcp_listener_tests.cpp)
     add_streamrelay_unit_test(streamrelay_session_device_tests tests/unit/session_device_tests.cpp)
+    add_streamrelay_unit_test(streamrelay_store_port_tests tests/unit/store_port_tests.cpp)
     add_streamrelay_unit_test(streamrelay_relay_router_tests tests/unit/relay_router_tests.cpp)
+    add_streamrelay_unit_test(streamrelay_command_store_port_tests tests/unit/command_store_port_tests.cpp)
     add_streamrelay_unit_test(streamrelay_control_tests tests/unit/control_tests.cpp)
     add_streamrelay_unit_test(streamrelay_enterprise_mvp_tests tests/unit/enterprise_mvp_tests.cpp)
     add_streamrelay_unit_test(streamrelay_ops_observability_tests tests/unit/ops_observability_tests.cpp)

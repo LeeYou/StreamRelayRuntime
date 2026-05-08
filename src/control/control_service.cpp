@@ -23,7 +23,7 @@ core::ByteBuffer encode_dispatch_payload(const CommandRecord& record) {
 
 } 
 
-ControlService::ControlService(InMemoryCommandStore& store, InMemoryCommandAuditLog& audit, device_registry::InMemoryDeviceRegistry& devices, messaging::InMemoryMessageBus& bus)
+ControlService::ControlService(ICommandStore& store, ICommandAuditLog& audit, device_registry::InMemoryDeviceRegistry& devices, messaging::InMemoryMessageBus& bus)
     : store_(store), audit_(audit), devices_(devices), bus_(bus) {}
 
 void ControlService::allow_command_type(std::string command_type) {

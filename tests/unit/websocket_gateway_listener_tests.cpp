@@ -1,0 +1,110 @@
+#include <cassert>
+#include <chrono>
+#include <string>
+
+#include "gateway/websocket_gateway_listener.h"
+#include "messaging/in_memory_message_bus.h"
+#include "observability/metrics.h"
+#include "security/auth.h"
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
+namespace {
+
+std::string handshake_request(const std::string& token) {
+    std::string request;
+    request += "GET /streamrelay HTTP/1.1\r\n";
+    request += "Host: localhost\r\n";
+    request += "Upgrade: websocket\r\n";
+    request += "Connection: Upgrade\r\n";
+    request += "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+    request += "Sec-WebSocket-Version: 13\r\n";
+    request += "X-StreamRelay-Token: " + token + "\r\n";
+    request += "\r\n";
+    return request;
+}
+
+} 
+
+int main() {
+    const auto system_now = std::chrono::system_clock::now();
+    const auto steady_now = std::chrono::steady_clock::now();
+
+    streamrelay::security::StaticTokenAuthenticator authenticator;
+    streamrelay::security::AuthClaims claims;
+    claims.tenant_id = "tenant-1";
+    claims.principal_id = "operator-1";
+    claims.roles.insert("admin");
+    claims.expires_at = system_now + std::chrono::hours{1};
+    assert(authenticator.add_token("admin-token", claims).ok());
+
+    streamrelay::transport::InMemoryTransportServer transport;
+    streamrelay::messaging::InMemoryMessageBus bus;
+    streamrelay::gateway::GatewayRuntimeOptions runtime_options;
+    runtime_options.connection_manager.gateway_id = "gateway-a";
+    streamrelay::gateway::GatewayRuntime runtime{runtime_options, bus};
+    streamrelay::session::InMemorySessionService sessions;
+    streamrelay::device_registry::InMemoryDeviceRegistry devices;
+    streamrelay::observability::MetricsRegistry metrics;
+    streamrelay::gateway::GatewayEdge edge{transport, runtime, sessions, devices, authenticator, metrics};
+    streamrelay::gateway::WebSocketGatewayAdapter adapter{edge};
+
+    streamrelay::transport::TcpListener tcp_listener;
+    streamrelay::transport::TcpListenerOptions tcp_options;
+    tcp_options.bind_address = "127.0.0.1";
+    tcp_options.port = 0;
+    auto started = tcp_listener.start(tcp_options);
+
+#ifdef _WIN32
+    assert(started.ok());
+    const auto status = tcp_listener.status();
+
+    auto client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(client != INVALID_SOCKET);
+    DWORD timeout_ms = 2000;
+    auto receive_timeout_result = setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    auto send_timeout_result = setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    assert(receive_timeout_result == 0);
+    assert(send_timeout_result == 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(status.port);
+    auto pton_result = inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+    assert(pton_result == 1);
+    auto connect_result = connect(client, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    assert(connect_result != SOCKET_ERROR);
+
+    const auto request = handshake_request("admin-token");
+    auto sent_request = send(client, request.data(), static_cast<int>(request.size()), 0);
+    assert(sent_request == static_cast<int>(request.size()));
+
+    streamrelay::gateway::WebSocketGatewayListener gateway_listener{tcp_listener, adapter};
+    auto accepted = gateway_listener.accept_admin_once(system_now, steady_now);
+    assert(accepted.ok());
+    assert(accepted.value().connection.open());
+    assert(metrics.counter("gateway.admin_accepted") == 1);
+
+    char response[512]{};
+    const auto received = recv(client, response, sizeof(response), 0);
+    assert(received > 0);
+    const std::string raw_response{response, static_cast<std::size_t>(received)};
+    assert(raw_response.find("101 Switching Protocols") != std::string::npos);
+    assert(raw_response.find("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos);
+
+    closesocket(client);
+    auto closed_connection = accepted.value().connection.close();
+    assert(closed_connection.ok());
+    auto stopped = tcp_listener.stop();
+    assert(stopped.ok());
+#else
+    assert(!started.ok());
+#endif
+
+    return 0;
+}
